@@ -1,1 +1,1 @@
-<video controls src="ExportedVideo.mp4" title="Title"></video>
+[<img src="Thumbnail.png" width="100%">](hhttps://youtu.be/6in71g7-dEs "Simulation")
