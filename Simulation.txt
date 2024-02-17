@@ -1,0 +1,297 @@
+using System.Collections.Generic;
+using UnityEngine;
+
+public class RobotController : MonoBehaviour
+{
+    // naming constraints do not change
+    [SerializeField] private WheelCollider WCFrontLeft;
+    [SerializeField] private WheelCollider WCFrontRight;
+    [SerializeField] private WheelCollider WCBackLeft;
+    [SerializeField] private WheelCollider WCBackRight;
+
+    [SerializeField] private Transform WTFrontLeft;
+    [SerializeField] private Transform WTFrontRight;
+    [SerializeField] private Transform WTBackLeft;
+    [SerializeField] private Transform WTBackRight;
+
+    [SerializeField] private Transform RCFR;
+    [SerializeField] private Transform RCL1;
+    [SerializeField] private Transform RCL2;
+    [SerializeField] private Transform RCL3;
+    [SerializeField] private Transform RCR1;
+    [SerializeField] private Transform RCR2;
+    [SerializeField] private Transform RCR3;
+    [SerializeField] private Transform AGOR;
+
+    [SerializeField] private float velocity;
+    [SerializeField] private float angle_x;
+    [SerializeField] private float angle_y;
+    [SerializeField] private float angle_z;
+
+    private Rigidbody rb;
+    private Vector3 target;
+    private List<Transform> RoadTracing = new List<Transform>();
+    private int targetIndex = 0;
+    private float SteeringAngle = 30f;
+    private float speed = 6f;
+    private bool isCrossingObstacle = false;
+    
+    private void Start()
+    {
+        rb = GetComponent<Rigidbody>();
+
+        this.angle_x = AGOR.eulerAngles.x;
+        this.angle_y = AGOR.eulerAngles.y;
+        this.angle_z = AGOR.eulerAngles.z;
+
+        StartSensingRoadTillEndAtDisance(50f);
+    }
+
+    private void FixedUpdate()
+    {
+        // set current velocity length for further calculations
+        velocity = rb.velocity.magnitude;
+
+        // initially we assume there is not obstacle
+        isCrossingObstacle = false;
+
+        // now see for any obstacles are there and calculate the value to avoid collusion and steer accordingly
+        AdjustSteeringAngle(getDirection());
+        AdjustSpeedOnSlopes();
+        AdjustMotorSpeed();
+        AdjustWheels();
+
+        Debug.Log("Current = targetIndex"  + targetIndex);
+        Debug.Log("Current =  total " + RoadTracing.Count);
+    }
+
+    private void StartSensingRoadTillEndAtDisance(float dist)
+    {
+        RaycastHit hit = getHit(transform.position, -transform.up, dist);
+        
+        if (hit.collider != null && isRoadLayer(hit.collider))
+        {
+            RoadTracing.Add(hit.collider.transform);
+            NewTracing(hit.collider.transform);
+        }
+    }
+
+    private void NewTracing(Transform trans)
+    {
+        MeshFilter mf = trans.GetComponent<MeshFilter>();
+        // from center of the road
+        Vector3 vCenter = trans.TransformPoint(mf.mesh.bounds.center);
+
+        // all other points towards the corners and select the ponit that is not already selected
+        TraceRecursively(vCenter - trans.right * 10, 5);
+        TraceRecursively(vCenter + trans.right * 10, 5);
+        TraceRecursively(vCenter + transform.forward * 10, 5);
+        TraceRecursively(vCenter - trans.forward * 10, 5);
+        TraceRecursively(vCenter + trans.forward * 10, 5);
+        TraceRecursively(trans.localPosition, 5);
+        TraceRecursively(trans.TransformPoint(mf.mesh.bounds.min), 5);
+    }
+
+    private void TraceRecursively(Vector3 pos, float detectionRadius)
+    {
+        Collider[] colliders = Physics.OverlapSphere(pos, detectionRadius);
+
+        foreach (Collider collider in colliders)
+        {
+            if (isRoadLayer(collider) && !RoadTracing.Exists(x => x == collider.transform))
+            {
+                RoadTracing.Add(collider.transform);
+                NewTracing(collider.transform);
+                break;
+            }
+        }
+    }  
+
+    
+    private float isColliedThenSetCrossing(Vector3 v1, Vector3 v2, float m, float dist)
+    {
+        RaycastHit hit = getHit(v1, v2, dist);
+
+        if (hit.collider != null && !isRoadLayer(hit.collider))
+        {
+            isCrossingObstacle = true;
+            return m;
+        }
+
+        return 0;
+    }
+
+    private Vector3 GetTarget()
+    {
+        MeshFilter mesh = RoadTracing[targetIndex].GetComponent<MeshFilter>();
+        Vector3 center = mesh.sharedMesh.bounds.center;
+        return RoadTracing[targetIndex].TransformPoint(mesh.mesh.name == "MT_Turn Instance" ? center + new Vector3(-2.5f, 0, 0) : center);
+    }
+
+    private void AdjustMotorTorque(WheelCollider  wheelCollider, float dist) {
+        Debug.Log(AdjustSpeedOnSlopes());
+        wheelCollider.motorTorque = Mathf.MoveTowards(wheelCollider.motorTorque, Mathf.Clamp01(dist / 10f) * (300f) * AdjustSpeedOnSlopes(), 250f * Time.deltaTime);
+        AdjustVelocity(wheelCollider);
+    }
+
+    private void AdjustVelocity(WheelCollider wheelCollider)
+    {
+        if (velocity >= speed)
+            wheelCollider.brakeTorque = (700f);
+        else
+            wheelCollider.brakeTorque = 0f;
+    }
+
+    private void AdjustMotorTorque()
+    {
+        float targetDist = Vector3.Distance(transform.position, target);
+
+        AdjustMotorTorque(WCFrontLeft, targetDist);
+        AdjustMotorTorque(WCFrontRight, targetDist);
+        AdjustMotorTorque(WCBackLeft, targetDist);
+        AdjustMotorTorque(WCBackRight, targetDist);
+
+        if (targetDist < 4.5f)
+        {
+            if (targetIndex < RoadTracing.Count - 1)
+                targetIndex++;
+        }
+    }
+
+
+    private void AdjustSteeringAngle(float direction)
+    {
+        float steerAngle = SteeringAngle * direction;
+        float t = 50 * Time.fixedDeltaTime;
+
+        WCFrontLeft.steerAngle = Mathf.Lerp(WCFrontLeft.steerAngle, steerAngle, t);
+        WCFrontRight.steerAngle = Mathf.Lerp(WCFrontRight.steerAngle, steerAngle, t);
+    }
+
+
+    private void AdjustSteering(float steerAngle)
+    {
+        if (!(steerAngle > -1 && steerAngle < 1 || isCrossingObstacle))
+        {
+            WCFrontLeft.steerAngle = Mathf.Lerp(WCFrontLeft.steerAngle, steerAngle, 50 * Time.fixedDeltaTime);
+            WCFrontRight.steerAngle = Mathf.Lerp(WCFrontRight.steerAngle, steerAngle, 50 * Time.fixedDeltaTime);
+        }
+    }
+
+    private void AdjustMotorSpeed()
+    {
+        target = GetTarget();
+
+        float singleAngleWithTarget = Vector3.SignedAngle(transform.forward, (target - transform.position).normalized, Vector3.up);
+
+        Debug.Log("Singled Angle with target:" + singleAngleWithTarget);
+        float boundSignedAngle = 160f;
+
+        if (singleAngleWithTarget <  -boundSignedAngle || singleAngleWithTarget > boundSignedAngle)
+        {
+            if (targetIndex < RoadTracing.Count - 1)
+                targetIndex++;
+            return;
+        }
+
+        AdjustSteering(Mathf.Clamp(singleAngleWithTarget, -SteeringAngle, SteeringAngle));
+        AdjustMotorTorque();
+    }
+
+    private float AdjustSpeedOnSlopes()
+    {
+        RaycastHit hit = getHit(AGOR.position, -transform.up, 50f);
+
+        if (hit.collider != null)
+        {
+            float angle = Vector3.Angle(hit.normal, Vector3.up);
+
+            if (angle > 0)
+                return (Vector3.Dot(hit.normal, transform.forward) < 0) ? Mathf.Lerp(1f, 0.8f, 100f * Time.deltaTime) :  Mathf.Lerp(1f, (angle / 45) + 2, 10f * Time.deltaTime);
+        }
+
+        return 1f;
+    }
+
+    private void AdjustWheels()
+    {
+        AdjustWheel(WCFrontRight, WTFrontRight);
+        AdjustWheel(WCFrontLeft, WTFrontLeft);
+        AdjustWheel(WCBackRight, WTBackRight);
+        AdjustWheel(WCBackLeft, WTBackLeft);
+    }
+
+    private void AdjustWheel(WheelCollider wc, Transform wt)
+    {
+        Vector3 pos;
+        Quaternion rot;
+
+        wc.GetWorldPose(out pos, out rot);
+
+        wt.position = pos;
+        wt.rotation = rot;
+    }
+
+    private float getSensingLength()
+    {
+        return (velocity / speed) * 2;
+    }
+
+    private float getRightSensorsMultipier(float dist)
+    {
+        float m1 = isColliedThenSetCrossing(RCR3.position, RCR3.forward, -1f, dist);
+        float m2 = isColliedThenSetCrossing(RCR3.position, Quaternion.AngleAxis(25f, transform.up) * transform.forward, -0.8f, 8f);
+
+        return m1 + m2;
+    }
+
+    private float getLeftSensorsMultipier(float dist)
+    {
+        float m1 = isColliedThenSetCrossing(RCL3.position, RCL3.forward, 1f, dist);
+        float m2 = isColliedThenSetCrossing(RCL3.position, Quaternion.AngleAxis(-25f, transform.up) * transform.forward, 0.8f, 8f);
+
+        return m1 + m2;
+    }
+
+    private float getAgorSensorsMultipier()
+    {
+        float m1 = isColliedThenSetCrossing(AGOR.position, Quaternion.AngleAxis(-16, transform.up) * transform.right, -0.16f, 5f * 0.35f);
+        float m2 = isColliedThenSetCrossing(AGOR.position, Quaternion.AngleAxis(16, transform.up) * -transform.right, 0.16f, 5f * 0.35f);
+
+        return m1 + m2;
+    }
+
+    private float getFrontSensorsMultipier(float dist)
+    {
+        return isColliedThenSetCrossing(RCFR.position, RCFR.forward, 0, dist);
+    }
+
+    private float getDirection()
+    {
+        float dist = getSensingLength() + 5f;
+
+        return getRightSensorsMultipier(dist) + getLeftSensorsMultipier(dist) + getFrontSensorsMultipier(dist) + getAgorSensorsMultipier();
+    }
+
+    private bool isRoadLayer(Collider collider)
+    {
+        return (collider.gameObject.layer == 9);
+    }
+
+    private RaycastHit getHit(Vector3 v1, Vector3 v2, float dist)
+    {
+        RaycastHit hit;
+
+        Physics.Raycast(v1, v2, out hit, dist);
+
+        return hit;
+    }
+
+    private void Stop()
+    {
+        WCFrontLeft.brakeTorque = 1000f;
+        WCFrontRight.brakeTorque = 1000f;
+        WCBackLeft.brakeTorque = 1000f;
+        WCBackRight.brakeTorque = 1000f;
+    }
+}
