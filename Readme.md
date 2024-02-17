@@ -1,1 +1,1 @@
-[<img src="Thumbnail.png" width="100%">](hhttps://youtu.be/6in71g7-dEs "Simulation")
+[<img src="Thumbnail.png" width="100%">](https://youtu.be/6in71g7-dEs "Simulation")
